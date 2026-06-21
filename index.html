@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>にゃんこぴょんぴょん</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;
@@ -34,10 +34,15 @@
     box-shadow:0 6px 0 #D9B36B;cursor:pointer;}
   .start-btn:active{transform:translateY(3px);box-shadow:0 3px 0 #D9B36B;}
   .hide{display:none!important;}
+  #muteBtn{position:fixed;top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right));
+    z-index:8;width:42px;height:42px;border-radius:12px;border:3px solid rgba(255,255,255,.85);
+    background:rgba(60,40,20,.30);color:#fff;font-size:20px;cursor:pointer;backdrop-filter:blur(2px);}
+  #muteBtn:active{transform:translateY(2px);}
   .hintrow{font-size:13px;opacity:.92;font-weight:700;}
 </style></head>
 <body>
 <div id="wrap"><canvas id="game"></canvas></div>
+<button id="muteBtn" aria-label="音">🔊</button>
 
 <div class="ctl" id="pad">
   <div class="kcol"><div class="key" id="bLeft" data-k="left">◀</div><div class="klabel">いどう</div></div>
@@ -50,14 +55,23 @@
 
 <div class="ov" id="startScreen">
   <h1>にゃんこぴょんぴょん</h1>
-  <p>マイクラ風ワールドを冒険！ わんこをパンチか踏みつけで撃退。青い魚を10匹で1UP、金の魚は1匹で1UP。最後はボスわんこを倒そう！</p>
+  <p>マイクラ風ワールドを冒険！ わんこをパンチか踏みつけで撃退。青い魚を10匹で1UP、金の魚は1匹で1UP。ボスわんこを倒すと次のワールドへ！</p>
   <p class="hintrow">スマホ：左右で移動・⬆でジャンプ・✊でパンチ<br>PC：←→/AD移動・Space/↑ジャンプ・Z/Jパンチ</p>
-  <button class="start-btn" id="startBtn">スタート</button>
+  <p class="hintrow" id="hiLineStart"></p>
+  <button class="start-btn hide" id="contBtn">つづきから</button>
+  <button class="start-btn" id="startBtn">はじめから</button>
+</div>
+<div class="ov hide" id="clearScreen">
+  <h1 id="clearTitle">ワールドクリア！ 🎉</h1>
+  <p id="clearMsg"></p>
+  <button class="start-btn" id="nextBtn">つぎのワールドへ</button>
 </div>
 <div class="ov hide" id="endScreen">
   <h1 id="endTitle">クリア！</h1>
   <p id="endMsg"></p>
-  <button class="start-btn" id="retryBtn">もう一度</button>
+  <p class="hintrow" id="hiLineEnd"></p>
+  <button class="start-btn hide" id="contBtn2">つづきから</button>
+  <button class="start-btn" id="retryBtn">はじめから</button>
 </div>
 
 <script>
@@ -73,6 +87,19 @@ function resize(){
 }
 window.addEventListener('resize',resize); resize();
 
+// ---- prevent mobile double-tap zoom & pinch (but keep buttons working) ----
+function isCtl(t){ return t && t.closest && t.closest('button,.key'); }
+let _lastTap=0;
+document.addEventListener('touchend',function(e){
+  if(isCtl(e.target))return;                 // don't interfere with buttons
+  const now=Date.now();
+  if(now-_lastTap<=350){ e.preventDefault(); } // block the 2nd quick tap (=zoom)
+  _lastTap=now;
+},{passive:false});
+document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gesturestart',e=>e.preventDefault()); // iOS pinch
+cv.addEventListener('touchstart',e=>e.preventDefault(),{passive:false}); // canvas: no zoom/scroll
+
 // ---------- assets ----------
 const imgs={}; let toLoad=0, loaded=0, ready=false;
 for(const k in SPRITES){ toLoad++; const im=new Image();
@@ -84,44 +111,55 @@ const TILE=40;
 function rnd(s){ // simple seeded
   let x=Math.sin(s*999.7)*43758.5453; return x-Math.floor(x);
 }
-function makeBlock(kind){
+const THEMES=[
+  {sky1:'#7FC7E8',sky2:'#CDEBF2',top:'#5db64a',top2:'#4ea33c',top3:'#73c95e',edge:'#3f7d31',blade:'#73c95e',
+   dirt:'#7a4b27',dirt2:'#6b4022',dirt3:'#8a5a30',stone:'#8d8f93',stone2:'#7c7e82',stone3:'#a2a4a8',ground:'#ECE2D6',name:'くさはら'},
+  {sky1:'#F9D58C',sky2:'#FBEAC6',top:'#E6C56B',top2:'#D4AF52',top3:'#F2D98A',edge:'#B5903B',blade:'#E0BE66',
+   dirt:'#D9B36B',dirt2:'#C79E54',dirt3:'#E6C982',stone:'#C2A268',stone2:'#AC8B50',stone3:'#D6BC84',ground:'#EBD7AE',name:'さばく'},
+  {sky1:'#BBE0F0',sky2:'#EAF5FB',top:'#F2F7FB',top2:'#DCE7EF',top3:'#FFFFFF',edge:'#B7CCD9',blade:'#FFFFFF',
+   dirt:'#7a5a45',dirt2:'#6a4d3a',dirt3:'#8c6a52',stone:'#AEC6D6',stone2:'#98B3C6',stone3:'#C8DCE8',ground:'#E4EEF4',name:'ゆきやま'},
+  {sky1:'#241F38',sky2:'#473A5C',top:'#3E6B3A',top2:'#345C31',top3:'#4C7E47',edge:'#244A22',blade:'#4C7E47',
+   dirt:'#4A3322',dirt2:'#3C2A1C',dirt3:'#58402C',stone:'#5A5560',stone2:'#4A4650',stone3:'#6E6878',ground:'#2E2840',name:'どうくつ'}
+];
+function makeBlock(kind,T){
   const c=document.createElement('canvas'); c.width=TILE;c.height=TILE;
-  const g=c.getContext('2d');
+  const g=c.getContext('2d'); const P=5;
   function px(x,y,w,h,col){g.fillStyle=col;g.fillRect(x,y,w,h);}
-  const P=5; // pixel size for speckle grid
   if(kind==='grass'){
-    px(0,0,TILE,TILE,'#7a4b27');               // dirt base
-    for(let y=0;y<TILE;y+=P)for(let x=0;x<TILE;x+=P){
-      let r=rnd(x*7+y*13+1); if(y>=14){ g.fillStyle = r<.3?'#6b4022':(r>.8?'#875530':'#7a4b27'); g.fillRect(x,y,P,P);} }
-    px(0,0,TILE,15,'#5db64a');                  // grass top
-    for(let y=0;y<16;y+=P)for(let x=0;x<TILE;x+=P){
-      let r=rnd(x*5+y*9+3); g.fillStyle=r<.32?'#4ea33c':(r>.82?'#73c95e':'#5db64a'); g.fillRect(x,y,P,P);}
-    px(0,15,TILE,3,'#3f7d31');                   // edge line
-    g.fillStyle='#73c95e'; for(let x=0;x<TILE;x+=P){ if(rnd(x*3+7)<.5) g.fillRect(x,-0,P,4); }
+    px(0,0,TILE,TILE,T.dirt);
+    for(let y=0;y<TILE;y+=P)for(let x=0;x<TILE;x+=P){ let r=rnd(x*7+y*13+1);
+      if(y>=14){ g.fillStyle=r<.3?T.dirt2:(r>.8?T.dirt3:T.dirt); g.fillRect(x,y,P,P);} }
+    px(0,0,TILE,15,T.top);
+    for(let y=0;y<16;y+=P)for(let x=0;x<TILE;x+=P){ let r=rnd(x*5+y*9+3);
+      g.fillStyle=r<.32?T.top2:(r>.82?T.top3:T.top); g.fillRect(x,y,P,P);}
+    px(0,15,TILE,3,T.edge);
+    g.fillStyle=T.blade; for(let x=0;x<TILE;x+=P){ if(rnd(x*3+7)<.5) g.fillRect(x,0,P,4); }
   } else if(kind==='dirt'){
-    px(0,0,TILE,TILE,'#7a4b27');
+    px(0,0,TILE,TILE,T.dirt);
     for(let y=0;y<TILE;y+=P)for(let x=0;x<TILE;x+=P){ let r=rnd(x*7+y*13+2);
-      g.fillStyle=r<.3?'#6b4022':(r>.8?'#8a5a30':'#7a4b27'); g.fillRect(x,y,P,P);}
-  } else { // stone
-    px(0,0,TILE,TILE,'#8d8f93');
+      g.fillStyle=r<.3?T.dirt2:(r>.8?T.dirt3:T.dirt); g.fillRect(x,y,P,P);}
+  } else {
+    px(0,0,TILE,TILE,T.stone);
     for(let y=0;y<TILE;y+=P)for(let x=0;x<TILE;x+=P){ let r=rnd(x*7+y*13+5);
-      g.fillStyle=r<.3?'#7c7e82':(r>.82?'#a2a4a8':'#8d8f93'); g.fillRect(x,y,P,P);}
+      g.fillStyle=r<.3?T.stone2:(r>.82?T.stone3:T.stone); g.fillRect(x,y,P,P);}
   }
-  // subtle border
   g.strokeStyle='rgba(0,0,0,.10)'; g.lineWidth=2; g.strokeRect(1,1,TILE-2,TILE-2);
   return c;
 }
-const BLOCK={1:makeBlock('grass'),2:makeBlock('dirt'),3:makeBlock('stone')};
+let BLOCK={};
+function buildBlocks(t){ const T=THEMES[t%THEMES.length]; BLOCK={1:makeBlock('grass',T),2:makeBlock('dirt',T),3:makeBlock('stone',T)}; }
 
 // ---------- level ----------
 let map=[], COLS=170, ROWS=15, BASE=10, surf=[], dogs=[], fishes=[], goalX=0;
 let boss=null, bossDefeated=false, popups=[];
+let stage=1, theme=0, hiScore=0, hiStage=1, muted=false;
 const BLUE_1UP=10, MAXHEART=6;
 let LEVELW=0, LEVELH=ROWS*TILE;
 function gen(){
+  theme=(stage-1)%THEMES.length; buildBlocks(theme);
   map=Array.from({length:ROWS},()=>new Array(COLS).fill(0));
   surf=new Array(COLS).fill(-1); dogs=[]; fishes=[];
-  let cur=BASE, c=0, seed=7;
+  let cur=BASE, c=0, seed=7+stage*131;
   function R(){seed++; return rnd(seed);}
   while(c<COLS){
     if(c<6){surf[c]=BASE;c++;continue;}
@@ -135,7 +173,7 @@ function gen(){
     for(let y=s;y<ROWS;y++){ map[y][x] = (y===s)?1:(y<=s+2?2:3); } }
   // floating platforms
   for(let x=12;x<COLS-12;x+=1){ if(surf[x]<0)continue;
-    if(rnd(x*3+11)<0.07){ let py=Math.max(5,surf[x]-3-Math.floor(rnd(x)*1.6)); let len=3;
+    if(rnd(x*3+11+stage*53)<0.07){ let py=Math.max(5,surf[x]-3-Math.floor(rnd(x+stage*7)*1.6)); let len=3;
       for(let k=0;k<len&&x+k<COLS;k++){ map[py][x+k]=1; if(py+1<ROWS)map[py+1][x+k]=2; }
       // fishes over platform
       for(let k=0;k<len;k++) fishes.push({x:(x+k)*TILE+TILE/2,y:(py-1)*TILE+TILE/2,t:false,type:'blue'});
@@ -148,29 +186,29 @@ function gen(){
   }
   // some gold fish (1UP each)
   let gc=0;
-  for(const f of fishes){ if(rnd(f.x*0.7+f.y+13)<0.12){ f.type='gold'; gc++; } }
+  for(const f of fishes){ if(rnd(f.x*0.7+f.y+13+stage*17)<0.13){ f.type='gold'; gc++; } }
   if(gc<3){ for(let i=0;i<fishes.length&&gc<3;i+=Math.max(1,Math.floor(fishes.length/4))){ fishes[i].type='gold'; gc++; } }
   // boss arena (flat) + boss
   let cur2=surf[COLS-1];
   for(let i=COLS-16;i<COLS;i++){ surf[i]=cur2; for(let y=cur2;y<ROWS;y++) map[y][i]=(y===cur2)?1:(y<=cur2+2?2:3); }
   boss=mkBoss((COLS-9)*TILE, cur2*TILE); bossDefeated=false;
   // dogs on solid ground
-  for(let x=12;x<COLS-8;x+=1){ if(surf[x]>=0 && surf[x+1]>=0 && surf[x+2]>=0 && rnd(x*5+4)<0.09){
+  for(let x=12;x<COLS-8;x+=1){ if(surf[x]>=0 && surf[x+1]>=0 && surf[x+2]>=0 && rnd(x*5+4+stage*37)<Math.min(0.09+(stage-1)*0.025,0.22)){
       dogs.push(mkDog((x+0.5)*TILE, surf[x]*TILE)); x+=6; } }
   goalX=(COLS-4)*TILE; LEVELW=COLS*TILE;
 }
 function mkDog(cx,groundTopY){ return {w:42,h:30,x:cx-21,y:groundTopY-30,vx:0,
-  dir:(Math.random()<.5?-1:1),spd:46,alive:true,poof:0,frame:0,ft:0}; }
+  dir:(Math.random()<.5?-1:1),spd:46+(stage-1)*9,alive:true,poof:0,frame:0,ft:0}; }
 function mkBoss(cx,groundTopY){ return {w:88,h:64,x:cx-44,y:groundTopY-64,
-  dir:-1,spd:58,hp:6,maxhp:6,alive:true,hit:0,frame:0,ft:0,poof:0,active:false,
+  dir:-1,spd:52+(stage-1)*7,hp:5+stage,maxhp:5+stage,alive:true,hit:0,frame:0,ft:0,poof:0,active:false,
   ax0:(COLS-16)*TILE, ax1:(COLS-1)*TILE-88}; }
 
 // ---------- player ----------
 const P={x:0,y:0,w:28,h:46,vx:0,vy:0,grounded:false,facing:1,
   motion:'walk',animT:0,punch:0,dmg:0,inv:0,hearts:3,score:0,blue:0,
   jumpT:0,dead:false,lastSafe:{x:0,y:0}};
-function resetPlayer(){ P.x=2*TILE; P.y=(surf[2]-2)*TILE; P.vx=P.vy=0; P.grounded=false;
-  P.facing=1; P.hearts=3; P.score=0; P.blue=0; P.dmg=0;P.inv=0;P.punch=0;P.dead=false;
+function resetPlayer(keep){ P.x=2*TILE; P.y=(surf[2]-2)*TILE; P.vx=P.vy=0; P.grounded=false;
+  P.facing=1; if(!keep){P.hearts=3; P.score=0; P.blue=0;} P.dmg=0;P.inv=0;P.punch=0;P.dead=false;
   P.lastSafe={x:P.x,y:P.y}; }
 
 // ---------- input ----------
@@ -195,10 +233,39 @@ addEventListener('keyup',e=>{const k=KMAP[e.code]; if(k){e.preventDefault(); set
 
 // ---------- audio (tiny) ----------
 let AC=null;
-function beep(f,d,type='square',v=0.05){ try{ if(!AC)AC=new (window.AudioContext||window.webkitAudioContext)();
+function beep(f,d,type='square',v=0.05){ try{ if(muted)return; if(!AC)AC=new (window.AudioContext||window.webkitAudioContext)();
   const o=AC.createOscillator(),g=AC.createGain(); o.type=type;o.frequency.value=f;
   g.gain.value=v; o.connect(g);g.connect(AC.destination); o.start(); 
   g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+d); o.stop(AC.currentTime+d);}catch(e){} }
+
+// ---- BGM (chiptune loop) ----
+let bgmTimer=null, bgmStep=0, bgmGain=null;
+function ntone(semi){ return 261.63*Math.pow(2,semi/12); }
+const MELODY=[0,4,7,12, 7,4,0,4, 5,9,12,9, 7,4,2,-99,
+              2,5,9,14, 9,5,2,5, 7,11,14,11, 12,7,4,-99];
+const BASSL =[-12,-99,0,-99, -12,-99,0,-99, -7,-99,-3,-99, -5,-99,-1,-99,
+              -10,-99,-3,-99, -10,-99,-3,-99, -5,-99,-1,-99, -12,-99,0,-99];
+function bgmTick(){ if(!AC||muted)return; const tr=[0,3,-2,5][theme%4];
+  const m=MELODY[bgmStep%MELODY.length], bn=BASSL[bgmStep%BASSL.length], now=AC.currentTime+0.02;
+  function v(freq,dur,ty,vol){ const o=AC.createOscillator(),g=AC.createGain(); o.type=ty;o.frequency.value=freq;
+    g.gain.setValueAtTime(0.0001,now); g.gain.linearRampToValueAtTime(vol,now+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001,now+dur); o.connect(g);g.connect(bgmGain); o.start(now);o.stop(now+dur+0.02); }
+  if(m>-90) v(ntone(m+12+tr),0.15,'square',0.16);
+  if(bn>-90) v(ntone(bn+tr),0.22,'triangle',0.22);
+  bgmStep++; }
+function startBGM(){ if(!AC){try{AC=new(window.AudioContext||window.webkitAudioContext)();}catch(e){return;}}
+  if(AC.state==='suspended')AC.resume();
+  if(!bgmGain){ bgmGain=AC.createGain(); bgmGain.gain.value=muted?0:0.5; bgmGain.connect(AC.destination); }
+  if(bgmTimer)return; bgmStep=0; bgmTimer=setInterval(bgmTick,140); }
+function stopBGM(){ if(bgmTimer){clearInterval(bgmTimer);bgmTimer=null;} }
+function setMute(m){ muted=m; if(bgmGain)bgmGain.gain.value=muted?0:0.5;
+  const mb=document.getElementById('muteBtn'); if(mb)mb.textContent=muted?'🔇':'🔊'; saveHi(); }
+
+// ---- save / high score ----
+function loadHi(){ try{ const d=JSON.parse(localStorage.getItem('nyanko_hi')||'{}');
+  hiScore=d.score||0; hiStage=d.stage||1; muted=!!d.muted; }catch(e){} }
+function saveHi(){ try{ localStorage.setItem('nyanko_hi',JSON.stringify({score:hiScore,stage:hiStage,muted:muted})); }catch(e){} }
+function recordHi(){ let nw=false; if(P.score>hiScore){hiScore=P.score;nw=true;} if(stage>hiStage){hiStage=stage;nw=true;} saveHi(); return nw; }
 
 // ---------- physics consts ----------
 const GRAV=1550,MAXFALL=820,ACCEL=1800,FRIC=1700,WALKMAX=175,RUNMAX=305,JUMP=-720,PUNCH_DUR=0.40;
@@ -237,7 +304,7 @@ function update(dt){
   updateDogs(dt); updateFishes(); updateBoss(dt);
   for(const pu of popups) pu.t-=dt; popups=popups.filter(p=>p.t>0);
   // goal
-  if(P.x+P.w/2>goalX+8){ win(); }
+  // (clearing a stage is done by defeating the boss)
   // animation choose
   chooseMotion(dt);
 }
@@ -359,9 +426,11 @@ function draw(){
   camY=Math.max(0,Math.min(Math.max(0,LEVELH-VH), targetY));
   if(LEVELH<VH) camY=LEVELH-VH; // anchor bottom if level shorter
   // sky
+  const TH=THEMES[theme];
   let gsky=ctx.createLinearGradient(0,0,0,VH);
-  gsky.addColorStop(0,'#7FC7E8'); gsky.addColorStop(1,'#CDEBF2');
+  gsky.addColorStop(0,TH.sky1); gsky.addColorStop(1,TH.sky2);
   ctx.fillStyle=gsky; ctx.fillRect(0,0,VW,VH);
+  if(theme===3){ ctx.fillStyle='rgba(255,255,255,.7)'; for(let i=0;i<24;i++){ const sx=((i*167)%(LEVELW))-camX*0.3, sy=(i*53)%(VH*0.6); if(sx>-4&&sx<VW) ctx.fillRect((sx%VW+VW)%VW,sy,2,2);} }
   drawClouds();
   // tiles
   const cx0=Math.floor(camX/TILE), cx1=Math.floor((camX+VW)/TILE)+1;
@@ -520,12 +589,15 @@ function drawHUD(){
   const rem=BLUE_1UP-(P.blue%BLUE_1UP);
   const s='×'+P.blue+'  あと'+rem+'で1UP';
   ctx.strokeText(s,46,61); ctx.fillText(s,46,61);
+  ctx.textAlign='center'; ctx.font='bold 16px sans-serif'; ctx.lineWidth=3;
+  ctx.strokeStyle='rgba(60,40,20,.55)'; ctx.fillStyle='#fff';
+  ctx.strokeText('WORLD '+stage+' '+THEMES[theme].name, VW/2, 24); ctx.fillText('WORLD '+stage+' '+THEMES[theme].name, VW/2, 24);
   ctx.textAlign='right'; ctx.font='bold 21px sans-serif'; ctx.lineWidth=4;
-  ctx.strokeText('スコア '+P.score, VW-16, 34); ctx.fillText('スコア '+P.score, VW-16, 34);
+  ctx.strokeText('スコア '+P.score, VW-16, 62); ctx.fillText('スコア '+P.score, VW-16, 62);
 }
 
 // ---------- init world (for backdrop behind start screen) ----------
-gen(); resetPlayer();
+loadHi(); gen(); resetPlayer();
 
 // ---------- loop ----------
 let last=0;
@@ -536,19 +608,39 @@ function frame(t){ if(!last)last=t; let dt=Math.min(0.033,(t-last)/1000); last=t
 requestAnimationFrame(frame);
 
 // ---------- screens ----------
-const startScreen=document.getElementById('startScreen'), endScreen=document.getElementById('endScreen');
-function begin(){ gen(); resetPlayer(); state='play'; camX=0; popups=[];
-  startScreen.classList.add('hide'); endScreen.classList.add('hide'); if(!AC)try{AC=new(window.AudioContext||window.webkitAudioContext)();}catch(e){} }
-function win(){ state='end'; document.getElementById('endTitle').textContent='クリア！ 🎉';
-  document.getElementById('endMsg').textContent='ゴール到達！ スコア '+P.score+'（わんこ＆さかな）';
+const startScreen=document.getElementById('startScreen'), endScreen=document.getElementById('endScreen'),
+      clearScreen=document.getElementById('clearScreen');
+function hideOverlays(){ startScreen.classList.add('hide'); endScreen.classList.add('hide'); clearScreen.classList.add('hide'); }
+function newGame(){ stage=1; gen(); resetPlayer(false); state='play'; camX=0; popups=[];
+  hideOverlays(); startBGM(); }
+function nextStage(){ stage++; if(stage>hiStage){hiStage=stage; saveHi();} gen(); resetPlayer(true);
+  if(P.hearts<MAXHEART)P.hearts++;            // ステージ突破ボーナス
+  state='play'; camX=0; popups=[]; hideOverlays(); startBGM(); }
+function continueGame(){ stage=Math.max(1,hiStage); gen(); resetPlayer(false); state='play'; camX=0; popups=[];
+  hideOverlays(); startBGM(); }
+function stageClear(){ state='end'; recordHi();
+  document.getElementById('clearTitle').textContent='WORLD '+stage+' クリア！ 🎉';
+  document.getElementById('clearMsg').textContent='スコア '+P.score+'　つぎは「'+THEMES[stage%THEMES.length].name+'」ワールド！';
+  clearScreen.classList.remove('hide'); }
+function winBoss(){ stageClear(); }
+function win(){ stageClear(); }
+function lose(){ state='end'; stopBGM(); recordHi();
+  document.getElementById('endTitle').textContent='ゲームオーバー';
+  document.getElementById('endMsg').textContent='WORLD '+stage+'　スコア '+P.score;
+  document.getElementById('hiLineEnd').textContent='ハイスコア '+hiScore+'（最高 WORLD '+hiStage+'）';
+  const cb=document.getElementById('contBtn2');
+  if(hiStage>1){ cb.textContent='つづきから（WORLD '+hiStage+'）'; cb.classList.remove('hide'); } else cb.classList.add('hide');
   endScreen.classList.remove('hide'); }
-function winBoss(){ state='end'; document.getElementById('endTitle').textContent='ボスわんこ撃破！ 🎉';
-  document.getElementById('endMsg').textContent='クリア！ スコア '+P.score;
-  endScreen.classList.remove('hide'); }
-function lose(){ state='end'; document.getElementById('endTitle').textContent='ゲームオーバー';
-  document.getElementById('endMsg').textContent='スコア '+P.score+' … もう一回挑戦！';
-  endScreen.classList.remove('hide'); }
-document.getElementById('startBtn').addEventListener('click',begin);
-document.getElementById('retryBtn').addEventListener('click',begin);
+function refreshHiStart(){ document.getElementById('hiLineStart').textContent='ハイスコア '+hiScore+'（最高 WORLD '+hiStage+'）';
+  const cb=document.getElementById('contBtn');
+  if(hiStage>1){ cb.textContent='つづきから（WORLD '+hiStage+'）'; cb.classList.remove('hide'); } else cb.classList.add('hide'); }
+refreshHiStart();
+document.getElementById('startBtn').addEventListener('click',newGame);
+document.getElementById('retryBtn').addEventListener('click',()=>{ refreshHiStart(); newGame(); });
+document.getElementById('contBtn').addEventListener('click',continueGame);
+document.getElementById('contBtn2').addEventListener('click',continueGame);
+document.getElementById('nextBtn').addEventListener('click',nextStage);
+document.getElementById('muteBtn').addEventListener('click',()=>setMute(!muted));
+setMute(muted); // reflect saved mute on the button
 </script>
 </body></html>
