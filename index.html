@@ -119,7 +119,9 @@ const THEMES=[
   {sky1:'#BBE0F0',sky2:'#EAF5FB',top:'#F2F7FB',top2:'#DCE7EF',top3:'#FFFFFF',edge:'#B7CCD9',blade:'#FFFFFF',
    dirt:'#7a5a45',dirt2:'#6a4d3a',dirt3:'#8c6a52',stone:'#AEC6D6',stone2:'#98B3C6',stone3:'#C8DCE8',ground:'#E4EEF4',name:'ゆきやま'},
   {sky1:'#241F38',sky2:'#473A5C',top:'#3E6B3A',top2:'#345C31',top3:'#4C7E47',edge:'#244A22',blade:'#4C7E47',
-   dirt:'#4A3322',dirt2:'#3C2A1C',dirt3:'#58402C',stone:'#5A5560',stone2:'#4A4650',stone3:'#6E6878',ground:'#2E2840',name:'どうくつ'}
+   dirt:'#4A3322',dirt2:'#3C2A1C',dirt3:'#58402C',stone:'#5A5560',stone2:'#4A4650',stone3:'#6E6878',ground:'#2E2840',name:'どうくつ'},
+  {sky1:'#6FB7E8',sky2:'#BFE6F7',top:'#EFEFF6',top2:'#DDE3F0',top3:'#FFFFFF',edge:'#B9C6DD',blade:'#FFFFFF',
+   dirt:'#C9D3EE',dirt2:'#B6C2E2',dirt3:'#DCE4F5',stone:'#AEB9D8',stone2:'#9AA6C8',stone3:'#C8D2EC',ground:'#E9EFFB',name:'そら'}
 ];
 function makeBlock(kind,T){
   const c=document.createElement('canvas'); c.width=TILE;c.height=TILE;
@@ -146,8 +148,24 @@ function makeBlock(kind,T){
   g.strokeStyle='rgba(0,0,0,.10)'; g.lineWidth=2; g.strokeRect(1,1,TILE-2,TILE-2);
   return c;
 }
+function makeCrumble(){
+  const c=document.createElement('canvas'); c.width=TILE;c.height=TILE;
+  const g=c.getContext('2d');
+  // ふわふわ雲（透過背景）
+  g.fillStyle='#FFFFFF';
+  function puff(x,y,r){ g.beginPath(); g.arc(x,y,r,0,7); g.fill(); }
+  puff(10,24,12); puff(22,20,14); puff(33,25,11); puff(17,30,12); puff(28,31,11);
+  g.fillRect(4,26,32,12);
+  // やわらかい影
+  g.fillStyle='rgba(150,180,210,.30)';
+  g.fillRect(6,35,30,4);
+  // ふちのハイライト
+  g.fillStyle='rgba(255,255,255,.9)';
+  puff(22,18,10);
+  return c;
+}
 let BLOCK={};
-function buildBlocks(t){ const T=THEMES[t%THEMES.length]; BLOCK={1:makeBlock('grass',T),2:makeBlock('dirt',T),3:makeBlock('stone',T)}; }
+function buildBlocks(t){ const T=THEMES[t%THEMES.length]; BLOCK={1:makeBlock('grass',T),2:makeBlock('dirt',T),3:makeBlock('stone',T),4:makeCrumble()}; }
 
 // ---------- level ----------
 let map=[], COLS=170, ROWS=15, BASE=10, surf=[], dogs=[], fishes=[], goalX=0;
@@ -155,8 +173,25 @@ let boss=null, bossDefeated=false, popups=[];
 let stage=1, theme=0, hiScore=0, hiStage=1, muted=false;
 const BLUE_1UP=10, MAXHEART=6;
 let LEVELW=0, LEVELH=ROWS*TILE;
+// stage type cycle: 1ローテ = 6ステージ (4テーマ + そら + ボーナス)
+const STAGE_CYCLE=['grass','desert','snow','cave','sky','bonus'];
+let stageKind='grass', vertical=false, bonus=false, worldName='くさはら';
+let crumbles=[];
+let goalCleared=false;
 function gen(){
-  theme=(stage-1)%THEMES.length; buildBlocks(theme);
+  stageKind=STAGE_CYCLE[(stage-1)%STAGE_CYCLE.length];
+  vertical=(stageKind==='sky'); bonus=(stageKind==='bonus'); goalCleared=false;
+  crumbles=[];
+  // visual theme per kind
+  const themeOf={grass:0,desert:1,snow:2,cave:3,sky:4,bonus:0};
+  theme=themeOf[stageKind]; buildBlocks(theme);
+  worldName={grass:'くさはら',desert:'さばく',snow:'ゆきやま',cave:'どうくつ',sky:'そら',bonus:'ボーナス'}[stageKind];
+  if(bonus){ genBonus(); return; }
+  if(vertical){ genVertical(); return; }
+  genNormal();
+}
+function genNormal(){
+  ROWS=15; COLS=170; LEVELH=ROWS*TILE;
   map=Array.from({length:ROWS},()=>new Array(COLS).fill(0));
   surf=new Array(COLS).fill(-1); dogs=[]; fishes=[];
   let cur=BASE, c=0, seed=7+stage*131;
@@ -171,37 +206,98 @@ function gen(){
   // fill tiles
   for(let x=0;x<COLS;x++){ let s=surf[x]; if(s<0)continue;
     for(let y=s;y<ROWS;y++){ map[y][x] = (y===s)?1:(y<=s+2?2:3); } }
-  // floating platforms
+  // floating platforms (some become crumble = boro block)
   for(let x=12;x<COLS-12;x+=1){ if(surf[x]<0)continue;
     if(rnd(x*3+11+stage*53)<0.07){ let py=Math.max(5,surf[x]-3-Math.floor(rnd(x+stage*7)*1.6)); let len=3;
-      for(let k=0;k<len&&x+k<COLS;k++){ map[py][x+k]=1; if(py+1<ROWS)map[py+1][x+k]=2; }
-      // fishes over platform
+      const boro = rnd(x*13+5+stage*29)<0.4;
+      for(let k=0;k<len&&x+k<COLS;k++){
+        if(boro){ map[py][x+k]=4; crumbles.push({tx:x+k,ty:py,t:0,state:'idle',fy:0,alpha:1}); }
+        else { map[py][x+k]=1; if(py+1<ROWS)map[py+1][x+k]=2; }
+      }
       for(let k=0;k<len;k++) fishes.push({x:(x+k)*TILE+TILE/2,y:(py-1)*TILE+TILE/2,t:false,type:'blue'});
       x+=len+2;
     }
   }
   // fishes arcs over pits
-  for(let x=8;x<COLS-2;x++){ if(surf[x]<0 && surf[x-1]>=0){ // pit start
+  for(let x=8;x<COLS-2;x++){ if(surf[x]<0 && surf[x-1]>=0){
       let s=surf[x-1]; for(let k=0;k<3;k++) fishes.push({x:(x+k)*TILE+TILE/2,y:(s-2-(k===1?1:0))*TILE,t:false,type:'blue'}); }
   }
-  // some gold fish (1UP each)
+  // some gold fish
   let gc=0;
   for(const f of fishes){ if(rnd(f.x*0.7+f.y+13+stage*17)<0.13){ f.type='gold'; gc++; } }
   if(gc<3){ for(let i=0;i<fishes.length&&gc<3;i+=Math.max(1,Math.floor(fishes.length/4))){ fishes[i].type='gold'; gc++; } }
   // boss arena (flat) + boss
   let cur2=surf[COLS-1];
   for(let i=COLS-16;i<COLS;i++){ surf[i]=cur2; for(let y=cur2;y<ROWS;y++) map[y][i]=(y===cur2)?1:(y<=cur2+2?2:3); }
-  boss=mkBoss((COLS-9)*TILE, cur2*TILE); bossDefeated=false;
-  // dogs on solid ground
+  boss=mkBoss((COLS-9)*TILE, cur2*TILE, (COLS-16)*TILE, (COLS-1)*TILE-88); bossDefeated=false;
+  // dogs on solid ground (mixed kinds)
   for(let x=12;x<COLS-8;x+=1){ if(surf[x]>=0 && surf[x+1]>=0 && surf[x+2]>=0 && rnd(x*5+4+stage*37)<Math.min(0.09+(stage-1)*0.025,0.22)){
-      dogs.push(mkDog((x+0.5)*TILE, surf[x]*TILE)); x+=6; } }
+      const kr=rnd(x*9+7+stage*23); const kind = kr<0.34?'black':(kr<0.6?'spring':'normal');
+      dogs.push(mkDog((x+0.5)*TILE, surf[x]*TILE, kind)); x+=6; } }
   goalX=(COLS-4)*TILE; LEVELW=COLS*TILE;
 }
-function mkDog(cx,groundTopY){ return {w:42,h:30,x:cx-21,y:groundTopY-30,vx:0,
-  dir:(Math.random()<.5?-1:1),spd:46+(stage-1)*9,alive:true,poof:0,frame:0,ft:0}; }
-function mkBoss(cx,groundTopY){ return {w:88,h:64,x:cx-44,y:groundTopY-64,
+function genBonus(){
+  ROWS=15; COLS=120; LEVELH=ROWS*TILE; LEVELW=COLS*TILE;
+  map=Array.from({length:ROWS},()=>new Array(COLS).fill(0));
+  surf=new Array(COLS).fill(BASE); dogs=[]; fishes=[]; boss=null; bossDefeated=true;
+  for(let x=0;x<COLS;x++){ for(let y=BASE;y<ROWS;y++) map[y][x]=(y===BASE)?1:(y<=BASE+2?2:3); }
+  // 画面いっぱいの魚グリッド
+  let seed=stage*311+5;
+  function R(){seed++; return rnd(seed);}
+  for(let gx=5; gx<COLS-5; gx+=1){
+    for(let gy=BASE-7; gy<=BASE-1; gy++){
+      const type = R()<0.12?'gold':'blue';
+      fishes.push({x:gx*TILE+TILE/2, y:gy*TILE+TILE/2, t:false, type});
+    }
+  }
+  goalX=(COLS-3)*TILE;
+}
+function genVertical(){
+  ROWS=60; COLS=26; LEVELH=ROWS*TILE; LEVELW=COLS*TILE;
+  map=Array.from({length:ROWS},()=>new Array(COLS).fill(0));
+  surf=new Array(COLS).fill(-1); dogs=[]; fishes=[];
+  const floorTop=ROWS-2;
+  for(let x=0;x<COLS;x++){ map[floorTop][x]=1; map[ROWS-1][x]=2; surf[x]=floorTop; }
+  let seed=stage*97+41; function R(){seed++; return rnd(seed);}
+  let py=floorTop-3;
+  let lastX=Math.floor(COLS/2);
+  while(py>6){
+    let len=3+Math.floor(R()*3);                 // 3〜5マス（長め）
+    // 直前の足場の近くに置いて登りやすく
+    let x0=Math.max(1, Math.min(COLS-len-1, lastX-3+Math.floor(R()*6)));
+    const boro=R()<0.20;                          // 雲は少なめ
+    for(let k=0;k<len;k++){
+      if(boro){ map[py][x0+k]=4; crumbles.push({tx:x0+k,ty:py,t:0,state:'idle',fy:0,alpha:1,rt:0}); }
+      else map[py][x0+k]=1;
+    }
+    for(let k=0;k<len;k++) fishes.push({x:(x0+k)*TILE+TILE/2, y:(py-1)*TILE+TILE/2, t:false, type:(R()<0.14?'gold':'blue')});
+    // たまに同じ高さに補助の足場を追加
+    if(R()<0.35){
+      let bx=(R()<0.5)? Math.max(1,x0-5-Math.floor(R()*3)) : Math.min(COLS-3,x0+len+2+Math.floor(R()*3));
+      for(let k=0;k<2 && bx+k<COLS;k++) map[py][bx+k]=1;
+    }
+    // 敵は実体足場のみ・出現控えめ
+    if(!boro && R()<0.22){ const kr=R(); const kind=kr<0.5?'black':'spring';
+      dogs.push(mkDog((x0+0.5)*TILE, py*TILE, kind)); }
+    lastX=x0;
+    py -= 2+Math.floor(R()*2);                     // 2〜3行間隔（詰める）
+  }
+  // 頂上の広い足場 + ボス
+  const topY=4, cx0=Math.floor(COLS/2)-4;
+  for(let x=cx0;x<cx0+8;x++){ if(x>=0&&x<COLS) map[topY][x]=1; }
+  boss=mkBoss((cx0+4)*TILE, topY*TILE, cx0*TILE, (cx0+8)*TILE-88); bossDefeated=false;
+  goalX=-9999;
+}
+function mkDog(cx,groundTopY,kind){ kind=kind||'normal';
+  const baseY=groundTopY-30;
+  return {w:42,h:30,x:cx-21,y:baseY,baseY,vy:0,kind,
+    dir:(Math.random()<.5?-1:1),spd:46+(stage-1)*9,alive:true,poof:0,frame:0,ft:0,
+    hop:0, hopT:0.3+Math.random()*0.6, squash:0}; }
+function mkBoss(cx,groundTopY,ax0,ax1){ const baseY=groundTopY-64;
+  return {w:88,h:64,x:cx-44,y:baseY,baseY,vy:0,
   dir:-1,spd:52+(stage-1)*7,hp:5+stage,maxhp:5+stage,alive:true,hit:0,frame:0,ft:0,poof:0,active:false,
-  ax0:(COLS-16)*TILE, ax1:(COLS-1)*TILE-88}; }
+  jt:0.5+Math.random()*0.8,
+  ax0:ax0, ax1:ax1}; }
 
 // ---------- player ----------
 const P={x:0,y:0,w:28,h:46,vx:0,vy:0,grounded:false,facing:1,
@@ -270,18 +366,23 @@ function recordHi(){ let nw=false; if(P.score>hiScore){hiScore=P.score;nw=true;}
 // ---------- physics consts ----------
 const GRAV=1550,MAXFALL=820,ACCEL=1800,FRIC=1700,WALKMAX=175,RUNMAX=305,JUMP=-720,PUNCH_DUR=0.40;
 const FALLK=1.18, HANGV=140, HANGK=0.52;   // floaty: gentler rise, apex hang, slightly faster fall
-function solid(tx,ty){ if(tx<0||tx>=COLS||ty<0||ty>=ROWS)return false; return map[ty][tx]>0; }
+const DOG_GRAV=1500, DOG_HOP=300, SPRING_BOUNCE=JUMP*1.55, BOSS_GRAV=1500, BOSS_HOP=300;
+function solid(tx,ty){ if(tx<0||tx>=COLS||ty<0||ty>=ROWS)return false; const t=map[ty][tx]; return t===1||t===2||t===3; }
 
 let state='start';
 function update(dt){
   if(state!=='play')return;
   // horizontal
   let d=(IN.right?1:0)-(IN.left?1:0);
+  const slippery=(stageKind==='snow');
+  const fric = (slippery && P.grounded)? FRIC*0.14 : FRIC;
   if(d!==0 && P.dmg<=0){ P.vx+=d*ACCEL*dt; P.facing=d; }
-  else { if(P.vx>0){P.vx-=FRIC*dt; if(P.vx<0)P.vx=0;} else if(P.vx<0){P.vx+=FRIC*dt; if(P.vx>0)P.vx=0;} }
+  else { if(P.vx>0){P.vx-=fric*dt; if(P.vx<0)P.vx=0;} else if(P.vx<0){P.vx+=fric*dt; if(P.vx>0)P.vx=0;} }
   const mx=(IN.right||IN.left)?RUNMAX:RUNMAX; P.vx=Math.max(-mx,Math.min(mx,P.vx));
   // jump buffer timer (actual jump executed after ground check below)
   jumpBuf=Math.max(0,jumpBuf-dt);
+  // さばく: ずっと自動ジャンプ
+  if(stageKind==='desert' && P.grounded && P.dmg<=0){ jumpBuf=JBUF; }
   // punch
   if(punchQ){ if(P.punch<=0&&P.dmg<=0){ P.punch=PUNCH_DUR; doPunch(); beep(180,0.09,'sawtooth',0.06);} punchQ=false; }
   if(P.punch>0)P.punch-=dt;
@@ -292,23 +393,45 @@ function update(dt){
   P.vy+=gg*dt; if(P.vy>MAXFALL)P.vy=MAXFALL;
   // integrate + collide X
   P.x+=P.vx*dt; collideAxis('x');
-  P.y+=P.vy*dt; P.jumpT+=dt; collideAxis('y');
+  const prevBottom=P.y+P.h;
+  P.y+=P.vy*dt; P.jumpT+=dt; collideAxis('y', prevBottom);
   if(P.grounded) coyote=COYOTE; else coyote=Math.max(0,coyote-dt);
   if(jumpBuf>0 && coyote>0 && P.dmg<=0){ P.vy=JUMP; P.grounded=false; P.jumpT=0; jumpBuf=0; coyote=0; beep(520,0.12,'square',0.05); }
   // bounds
   if(P.x<0){P.x=0;P.vx=0;} if(P.x+P.w>LEVELW){P.x=LEVELW-P.w;P.vx=0;}
-  if(P.grounded && surf[Math.floor((P.x+P.w/2)/TILE)]>=0){ P.lastSafe={x:P.x,y:P.y-4}; }
+  if(P.grounded){ P.lastSafe={x:P.x,y:P.y-4}; }
   // pit fall
   if(P.y>LEVELH+60){ hurt(true); }
   // entities
-  updateDogs(dt); updateFishes(); updateBoss(dt);
+  updateDogs(dt); updateFishes(); updateBoss(dt); updateCrumbles(dt);
   for(const pu of popups) pu.t-=dt; popups=popups.filter(p=>p.t>0);
-  // goal
-  // (clearing a stage is done by defeating the boss)
+  // bonus stage: reach goal to clear
+  if(bonus && !goalCleared && P.x+P.w>goalX){ goalCleared=true; setTimeout(()=>{ if(state==='play') winBoss(); },200); }
   // animation choose
   chooseMotion(dt);
 }
-function collideAxis(ax){
+function updateCrumbles(dt){
+  for(const cb of crumbles){
+    if(cb.state==='falling'){ cb.fy+=700*dt; cb.alpha-=dt*1.6; if(cb.alpha<=0){ cb.state='gone'; cb.rt=2.8; } continue; }
+    if(cb.state==='gone'){
+      cb.rt-=dt;
+      if(cb.rt<=0){
+        // プレイヤーがそのマスに重なっていない時だけ復活
+        const tx=cb.tx*TILE, ty=cb.ty*TILE;
+        const overlap=(P.x+P.w>tx+2 && P.x<tx+TILE-2 && P.y+P.h>ty-2 && P.y<ty+TILE);
+        if(!overlap){ cb.state='idle'; cb.t=0; cb.fy=0; cb.alpha=1; map[cb.ty][cb.tx]=4; }
+      }
+      continue;
+    }
+    const top=cb.ty*TILE;
+    const onTop = P.grounded && (P.y+P.h)>=top-3 && (P.y+P.h)<=top+8
+      && (P.x+P.w)>cb.tx*TILE+3 && P.x<cb.tx*TILE+TILE-3;
+    if(onTop && cb.state==='idle'){ cb.state='shaking'; cb.t=0; }
+    if(cb.state==='shaking'){ cb.t+=dt;
+      if(cb.t>=1.0){ cb.state='falling'; map[cb.ty][cb.tx]=0; cb.alpha=1; cb.fy=0; beep(520,0.14,'sine',0.04); } }
+  }
+}
+function collideAxis(ax, prevBottom){
   const x0=Math.floor(P.x/TILE), x1=Math.floor((P.x+P.w-1)/TILE);
   const y0=Math.floor(P.y/TILE), y1=Math.floor((P.y+P.h-1)/TILE);
   if(ax==='x'){
@@ -322,6 +445,17 @@ function collideAxis(ax){
       if(P.vy>0){ P.y=ty*TILE-P.h; P.vy=0; P.grounded=true; }
       else if(P.vy<0){ P.y=(ty+1)*TILE; P.vy=0; }
       return;
+    }
+    // 雲（tile 4）= 片方向の足場。落下中で、前フレームに雲の上にいた時だけ着地
+    if(P.vy>0 && prevBottom!=null){
+      const ty=Math.floor((P.y+P.h-1)/TILE);
+      if(ty>=0 && ty<ROWS){
+        for(let tx=x0;tx<=x1;tx++){
+          if(map[ty][tx]===4){ const top=ty*TILE;
+            if(prevBottom<=top+4 && (P.y+P.h)>=top){ P.y=top-P.h; P.vy=0; P.grounded=true; return; }
+          }
+        }
+      }
     }
   }
 }
@@ -345,18 +479,30 @@ function hurt(fromPit){
 function updateDogs(dt){
   for(const dg of dogs){
     if(!dg.alive){ if(dg.poof>0)dg.poof-=dt; continue; }
-    // patrol with edge/wall detection
+    if(dg.squash>0)dg.squash-=dt;
+    // patrol with edge/wall detection (based on baseY foot line)
     const aheadX=dg.dir>0?dg.x+dg.w+2:dg.x-2;
-    const footTx=Math.floor(aheadX/TILE), footTy=Math.floor((dg.y+dg.h+2)/TILE);
-    const wallTy=Math.floor((dg.y+dg.h-4)/TILE);
+    const footTx=Math.floor(aheadX/TILE), footTy=Math.floor((dg.baseY+dg.h+2)/TILE);
+    const wallTy=Math.floor((dg.baseY+dg.h-4)/TILE);
     if(!solid(footTx,footTy) || solid(footTx,wallTy)) dg.dir*=-1;
     dg.x+=dg.dir*dg.spd*dt; dg.ft+=dt; if(dg.ft>0.18){dg.ft=0;dg.frame^=1;}
+    // black dog: continuous small hops
+    if(dg.kind==='black'){
+      dg.vy+=DOG_GRAV*dt; dg.y+=dg.vy*dt;
+      if(dg.y>=dg.baseY){ dg.y=dg.baseY; dg.vy=-DOG_HOP; }
+    }
     // collide with player
     if(P.x<dg.x+dg.w&&P.x+P.w>dg.x&&P.y<dg.y+dg.h&&P.y+P.h>dg.y){
       const stomp = P.vy>40 && (P.y+P.h-dg.y) < 22;
-      if(stomp){ dg.alive=false; dg.poof=0.3; P.vy=JUMP*0.6; P.score++; beep(700,0.12,'square',0.06); }
-      else if(P.punch>0){ /* punch handled separately */ }
-      else if(P.inv<=0){ hurt(false); }
+      if(dg.kind==='spring'){
+        if(stomp){ P.vy=SPRING_BOUNCE; P.grounded=false; dg.squash=0.18; beep(900,0.12,'square',0.06); beep(1320,0.1,'square',0.05); }
+        else if(P.punch>0){ /* punch handled separately */ }
+        else if(P.inv<=0){ hurt(false); }
+      } else {
+        if(stomp){ dg.alive=false; dg.poof=0.3; P.vy=JUMP*0.6; P.score++; beep(700,0.12,'square',0.06); }
+        else if(P.punch>0){ /* punch handled separately */ }
+        else if(P.inv<=0){ hurt(false); }
+      }
     }
   }
 }
@@ -382,6 +528,12 @@ function updateBoss(dt){
     bz.x = Math.max(bz.ax0, Math.min(bz.ax1, bz.x));
     bz.ft+=dt; if(bz.ft>0.15){bz.ft=0;bz.frame^=1;}
   }
+  // 不規則な小ジャンプ
+  if(bz.active){
+    bz.vy+=BOSS_GRAV*dt; bz.y+=bz.vy*dt;
+    if(bz.y>=bz.baseY){ bz.y=bz.baseY; bz.vy=0; bz.jt-=dt;
+      if(bz.jt<=0){ bz.vy=-(BOSS_HOP*(0.6+Math.random()*0.7)); bz.jt=0.4+Math.random()*1.2; } }
+  }
   if(bz.hit>0)bz.hit-=dt;
   if(P.x<bz.x+bz.w&&P.x+P.w>bz.x&&P.y<bz.y+bz.h&&P.y+P.h>bz.y){
     const stomp = P.vy>40 && (P.y+P.h-bz.y)<30;
@@ -397,11 +549,11 @@ function hitBoss(){ const bz=boss; if(!bz||!bz.alive||bz.hit>0)return;
     setTimeout(()=>{ if(state==='play') winBoss(); },650); } }
 function chooseMotion(dt){
   let m;
+  const airborne = (!P.grounded && coyote<=0);  // 1フレームの接地ブレを無視
   if(P.dmg>0) m='damage';
   else if(P.punch>0) m='punch';
-  else if(!P.grounded) m='jump';
+  else if(airborne) m='jump';
   else if(Math.abs(P.vx)>205) m='run';
-  else if(Math.abs(P.vx)>12) m='walk';
   else m='walk';
   if(m!==P.motion){ P.motion=m; if(m!=='walk'&&m!=='run')P.animT=0; }
   P.animT+=dt;
@@ -411,7 +563,8 @@ function spriteFrame(){
   if(P.motion==='jump'){ if(P.jumpT<0.09)return 0; if(P.vy<-40)return 1; if(P.vy>120)return 2; return 1; }
   if(P.motion==='punch'){ return Math.min(S.frames-1, Math.floor((PUNCH_DUR-P.punch)/(PUNCH_DUR/S.frames))); }
   if(P.motion==='damage'){ return Math.min(S.frames-1, Math.floor((0.6-Math.max(P.dmg,0))/(0.6/S.frames))); }
-  // walk/run
+  // walk/run — 静止中はフレーム0で固定
+  if(P.motion==='walk' && P.grounded && Math.abs(P.vx)<12) return 0;
   let speedf=Math.min(2.2,0.6+Math.abs(P.vx)/180);
   return Math.floor(P.animT/(S.dur/S.frames)*speedf)%S.frames;
 }
@@ -439,14 +592,27 @@ function draw(){
     for(let tx=Math.max(0,cx0);tx<=Math.min(COLS-1,cx1);tx++){
       const t=map[ty][tx]; if(t>0) ctx.drawImage(BLOCK[t], Math.round(tx*TILE-camX), Math.round(ty*TILE-camY));
     }
+  // crumble blocks (shaking cracks / falling pieces)
+  for(const cb of crumbles){
+    if(cb.state==='gone')continue;
+    const bx=cb.tx*TILE-camX;
+    if(cb.state==='falling'){
+      ctx.save(); ctx.globalAlpha=Math.max(0,cb.alpha);
+      ctx.drawImage(BLOCK[4], Math.round(bx), Math.round(cb.ty*TILE-camY+cb.fy));
+      ctx.restore();
+    } else if(cb.state==='shaking'){
+      const sh=Math.sin(performance.now()/30)*1.5;
+      ctx.drawImage(BLOCK[4], Math.round(bx+sh), Math.round(cb.ty*TILE-camY));
+    }
+  }
   // fishes
   for(const co of fishes){ if(co.t)continue; const sx=co.x-camX, sy=co.y-camY;
     if(sx<-20||sx>VW+20)continue; drawFish(sx,sy,co.type); }
-  // goal flag
-  drawGoal();
+  // goal flag (横スクロール時のみ)
+  if(!vertical) drawGoal();
   // dogs
   for(const dg of dogs){ const sx=dg.x-camX, sy=dg.y-camY; if(sx<-60||sx>VW+60)continue;
-    if(dg.alive) drawDog(sx,sy,dg.w,dg.h,dg.dir,dg.frame);
+    if(dg.alive) drawDog(sx,sy,dg.w,dg.h,dg.dir,dg.frame,dg.kind,dg.squash);
     else if(dg.poof>0) drawPoof(sx+dg.w/2,sy+dg.h/2,1-dg.poof/0.3); }
   // boss
   if(boss){ const sx=boss.x-camX, sy=boss.y-camY;
@@ -540,16 +706,27 @@ function drawGoal(){ const sx=goalX-camX; if(sx<-60||sx>VW+60)return;
 function drawPoof(x,y,p){ ctx.save(); ctx.globalAlpha=1-p; ctx.fillStyle='#fff';
   for(let i=0;i<6;i++){ let a=i/6*6.28; let r=10+p*22; ctx.beginPath();
     ctx.arc(x+Math.cos(a)*r,y+Math.sin(a)*r,6-p*4,0,7); ctx.fill(); } ctx.restore(); }
-function drawDog(sx,sy,w,h,dir,frame){
+function drawDog(sx,sy,w,h,dir,frame,kind,squash){
+  kind=kind||'normal'; squash=squash||0;
   ctx.save(); ctx.translate(Math.round(sx+w/2),Math.round(sy));
+  if(squash>0){ const s=1-squash*1.2; ctx.translate(0,h*(1-s)); ctx.scale(1,s); }
   if(dir>0)ctx.scale(-1,1); // art faces left by default
-  const C={body:'#D9A05B',dk:'#A66A2A',wt:'#FBF3E6',k:'#3a2a1e'};
+  let C;
+  if(kind==='black') C={body:'#3A3A40',dk:'#222226',wt:'#8A8A92',k:'#000'};
+  else if(kind==='spring') C={body:'#9AA0A8',dk:'#6E747C',wt:'#E4E7EC',k:'#2a2d33'};
+  else C={body:'#D9A05B',dk:'#A66A2A',wt:'#FBF3E6',k:'#3a2a1e'};
   function r(x,y,w2,h2,c){ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w2),Math.round(h2));}
   const lo=frame?2:-2;                       // legs 2-frame
   r(-20,h-9-lo,6,9,C.dk);  r(-8,h-9+lo,6,9,C.body);
   r(6,h-9-lo,6,9,C.dk);    r(14,h-9+lo,6,9,C.body);
   // tail
   r(15,h-26,8,7,C.dk); r(19,h-33,7,10,C.body);
+  // spring on back (ばねわんこ)
+  if(kind==='spring'){
+    ctx.strokeStyle='#C0C6CE'; ctx.lineWidth=3;
+    for(let i=0;i<3;i++){ ctx.beginPath(); ctx.ellipse(-2,h-30-i*5,9,3,0,0,7); ctx.stroke(); }
+    r(-7,h-46,10,5,'#D8443A');
+  }
   // body
   r(-20,h-22,38,16,C.body); r(-20,h-22,38,5,C.dk);
   r(-16,h-12,30,6,C.wt);                      // belly
@@ -591,7 +768,7 @@ function drawHUD(){
   ctx.strokeText(s,46,61); ctx.fillText(s,46,61);
   ctx.textAlign='center'; ctx.font='bold 16px sans-serif'; ctx.lineWidth=3;
   ctx.strokeStyle='rgba(60,40,20,.55)'; ctx.fillStyle='#fff';
-  ctx.strokeText('WORLD '+stage+' '+THEMES[theme].name, VW/2, 24); ctx.fillText('WORLD '+stage+' '+THEMES[theme].name, VW/2, 24);
+  ctx.strokeText('WORLD '+stage+' '+worldName, VW/2, 24); ctx.fillText('WORLD '+stage+' '+worldName, VW/2, 24);
   ctx.textAlign='right'; ctx.font='bold 21px sans-serif'; ctx.lineWidth=4;
   ctx.strokeText('スコア '+P.score, VW-16, 62); ctx.fillText('スコア '+P.score, VW-16, 62);
 }
@@ -619,8 +796,10 @@ function nextStage(){ stage++; if(stage>hiStage){hiStage=stage; saveHi();} gen()
 function continueGame(){ stage=Math.max(1,hiStage); gen(); resetPlayer(false); state='play'; camX=0; popups=[];
   hideOverlays(); startBGM(); }
 function stageClear(){ state='end'; recordHi();
-  document.getElementById('clearTitle').textContent='WORLD '+stage+' クリア！ 🎉';
-  document.getElementById('clearMsg').textContent='スコア '+P.score+'　つぎは「'+THEMES[stage%THEMES.length].name+'」ワールド！';
+  const nk=STAGE_CYCLE[(stage)%STAGE_CYCLE.length];
+  const nm={grass:'くさはら',desert:'さばく',snow:'ゆきやま',cave:'どうくつ',sky:'そら',bonus:'ボーナス'}[nk];
+  document.getElementById('clearTitle').textContent=(bonus?'ボーナスクリア！ 🐟':'WORLD '+stage+' クリア！ 🎉');
+  document.getElementById('clearMsg').textContent='スコア '+P.score+'　つぎは「'+nm+'」ワールド！';
   clearScreen.classList.remove('hide'); }
 function winBoss(){ stageClear(); }
 function win(){ stageClear(); }
