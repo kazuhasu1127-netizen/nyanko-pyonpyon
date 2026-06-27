@@ -165,7 +165,7 @@ function makeCrumble(){
   return c;
 }
 let BLOCK={};
-function buildBlocks(t){ const T=THEMES[t%THEMES.length]; BLOCK={1:makeBlock('grass',T),2:makeBlock('dirt',T),3:makeBlock('stone',T),4:makeCrumble()}; }
+function buildBlocks(t){ const T=THEMES[t%THEMES.length]; BLOCK={1:makeBlock('grass',T),2:makeBlock('dirt',T),3:makeBlock('stone',T),4:makeCrumble(),5:makeCrumble()}; }
 
 // ---------- level ----------
 let map=[], COLS=170, ROWS=15, BASE=10, surf=[], dogs=[], fishes=[], goalX=0;
@@ -206,6 +206,23 @@ function genNormal(){
   // fill tiles
   for(let x=0;x<COLS;x++){ let s=surf[x]; if(s<0)continue;
     for(let y=s;y<ROWS;y++){ map[y][x] = (y===s)?1:(y<=s+2?2:3); } }
+  // 横ジャンプで届かない幅広ピット(隣接ピット等)に踏み台＋ばねわんこを設置
+  for(let x=10;x<COLS-14;){
+    if(surf[x]<0){
+      let a=x; while(x<COLS && surf[x]<0)x++; const b=x-1, w=b-a+1;
+      if(w>=4){
+        const hL=(a-1>=0&&surf[a-1]>=0)?surf[a-1]:BASE;
+        const hR=(b+1<COLS&&surf[b+1]>=0)?surf[b+1]:BASE;
+        const h=Math.min(hL,hR);
+        let firstStone=true;
+        for(let p=a+2; p<=b-1; p+=4){
+          for(let k=0;k<2 && p+k<=b;k++){ map[h][p+k]=1; if(h+1<ROWS)map[h+1][p+k]=2; }
+          dogs.push(mkDog((p+1)*TILE, h*TILE, 'spring'));
+          if(firstStone){ fishes.push({x:(p+1)*TILE,y:(h-2)*TILE,t:false,type:'gold'}); firstStone=false; }
+        }
+      }
+    } else x++;
+  }
   // floating platforms (some become crumble = boro block)
   for(let x=12;x<COLS-12;x+=1){ if(surf[x]<0)continue;
     if(rnd(x*3+11+stage*53)<0.07){ let py=Math.max(5,surf[x]-3-Math.floor(rnd(x+stage*7)*1.6)); let len=3;
@@ -261,6 +278,7 @@ function genVertical(){
   let seed=stage*97+41; function R(){seed++; return rnd(seed);}
   let py=floorTop-3;
   let lastX=Math.floor(COLS/2);
+  const plats=[];
   while(py>6){
     let len=3+Math.floor(R()*3);                 // 3〜5マス（長め）
     // 直前の足場の近くに置いて登りやすく
@@ -268,13 +286,14 @@ function genVertical(){
     const boro=R()<0.20;                          // 雲は少なめ
     for(let k=0;k<len;k++){
       if(boro){ map[py][x0+k]=4; crumbles.push({tx:x0+k,ty:py,t:0,state:'idle',fy:0,alpha:1,rt:0}); }
-      else map[py][x0+k]=1;
+      else map[py][x0+k]=5;
     }
+    plats.push({py, x0, x1:x0+len-1, boro});
     for(let k=0;k<len;k++) fishes.push({x:(x0+k)*TILE+TILE/2, y:(py-1)*TILE+TILE/2, t:false, type:(R()<0.14?'gold':'blue')});
     // たまに同じ高さに補助の足場を追加
     if(R()<0.35){
       let bx=(R()<0.5)? Math.max(1,x0-5-Math.floor(R()*3)) : Math.min(COLS-3,x0+len+2+Math.floor(R()*3));
-      for(let k=0;k<2 && bx+k<COLS;k++) map[py][bx+k]=1;
+      for(let k=0;k<2 && bx+k<COLS;k++) map[py][bx+k]=5;
     }
     // 敵は実体足場のみ・出現控えめ
     if(!boro && R()<0.22){ const kr=R(); const kind=kr<0.5?'black':'spring';
@@ -284,8 +303,26 @@ function genVertical(){
   }
   // 頂上の広い足場 + ボス
   const topY=4, cx0=Math.floor(COLS/2)-4;
-  for(let x=cx0;x<cx0+8;x++){ if(x>=0&&x<COLS) map[topY][x]=1; }
+  for(let x=cx0;x<cx0+8;x++){ if(x>=0&&x<COLS) map[topY][x]=5; }
   boss=mkBoss((cx0+4)*TILE, topY*TILE, cx0*TILE, (cx0+8)*TILE-88); bossDefeated=false;
+  // 到達可能性チェック：床→各足場→ボス足場の順に並べ、登れない段差にばねわんこを配置
+  const allP=[{py:floorTop,x0:0,x1:COLS-1,boro:false}].concat(plats).concat([{py:topY,x0:cx0,x1:cx0+7,boro:false}]);
+  allP.sort((a,b)=>b.py-a.py); // 下(py大)→上(py小)
+  for(let i=0;i<allP.length-1;i++){
+    const L=allP[i], U=allP[i+1];
+    const dy=L.py-U.py;
+    let hgap=0;
+    if(U.x1<L.x0) hgap=L.x0-U.x1; else if(U.x0>L.x1) hgap=U.x0-L.x1;
+    const maxH = dy<=1?6 : (dy===2?5 : (dy===3?4 : -1)); // 実測ジャンプ性能から
+    const reachable = (dy<=0) ? true : (dy<=3 && hgap<=maxH);
+    if(!reachable){
+      // 下側の足場(L)にばねわんこ。boroなら崩れないソリッドに変換
+      if(L.boro){ for(let tx=L.x0;tx<=L.x1;tx++) map[L.py][tx]=5;
+        crumbles=crumbles.filter(cb=>!(cb.ty===L.py&&cb.tx>=L.x0&&cb.tx<=L.x1)); }
+      const tcx=Math.max(L.x0, Math.min(L.x1, Math.round((U.x0+U.x1)/2)));
+      dogs.push(mkDog((tcx+0.5)*TILE, L.py*TILE, 'spring'));
+    }
+  }
   goalX=-9999;
 }
 function mkDog(cx,groundTopY,kind){ kind=kind||'normal';
@@ -368,6 +405,7 @@ const GRAV=1550,MAXFALL=820,ACCEL=1800,FRIC=1700,WALKMAX=175,RUNMAX=305,JUMP=-72
 const FALLK=1.18, HANGV=140, HANGK=0.52;   // floaty: gentler rise, apex hang, slightly faster fall
 const DOG_GRAV=1500, DOG_HOP=300, SPRING_BOUNCE=JUMP*1.55, BOSS_GRAV=1500, BOSS_HOP=300;
 function solid(tx,ty){ if(tx<0||tx>=COLS||ty<0||ty>=ROWS)return false; const t=map[ty][tx]; return t===1||t===2||t===3; }
+function standable(tx,ty){ if(tx<0||tx>=COLS||ty<0||ty>=ROWS)return false; const t=map[ty][tx]; return t===1||t===2||t===3||t===4||t===5; }
 
 let state='start';
 function update(dt){
@@ -375,7 +413,7 @@ function update(dt){
   // horizontal
   let d=(IN.right?1:0)-(IN.left?1:0);
   const slippery=(stageKind==='snow');
-  const fric = (slippery && P.grounded)? FRIC*0.14 : FRIC;
+  const fric = (slippery && P.grounded)? FRIC*0.06 : FRIC;
   if(d!==0 && P.dmg<=0){ P.vx+=d*ACCEL*dt; P.facing=d; }
   else { if(P.vx>0){P.vx-=fric*dt; if(P.vx<0)P.vx=0;} else if(P.vx<0){P.vx+=fric*dt; if(P.vx>0)P.vx=0;} }
   const mx=(IN.right||IN.left)?RUNMAX:RUNMAX; P.vx=Math.max(-mx,Math.min(mx,P.vx));
@@ -446,12 +484,12 @@ function collideAxis(ax, prevBottom){
       else if(P.vy<0){ P.y=(ty+1)*TILE; P.vy=0; }
       return;
     }
-    // 雲（tile 4）= 片方向の足場。落下中で、前フレームに雲の上にいた時だけ着地
+    // 雲(tile 4)・空の足場(tile 5)= 片方向の足場。落下中で、前フレームに上にいた時だけ着地
     if(P.vy>0 && prevBottom!=null){
       const ty=Math.floor((P.y+P.h-1)/TILE);
       if(ty>=0 && ty<ROWS){
         for(let tx=x0;tx<=x1;tx++){
-          if(map[ty][tx]===4){ const top=ty*TILE;
+          if(map[ty][tx]===4||map[ty][tx]===5){ const top=ty*TILE;
             if(prevBottom<=top+4 && (P.y+P.h)>=top){ P.y=top-P.h; P.vy=0; P.grounded=true; return; }
           }
         }
@@ -484,7 +522,7 @@ function updateDogs(dt){
     const aheadX=dg.dir>0?dg.x+dg.w+2:dg.x-2;
     const footTx=Math.floor(aheadX/TILE), footTy=Math.floor((dg.baseY+dg.h+2)/TILE);
     const wallTy=Math.floor((dg.baseY+dg.h-4)/TILE);
-    if(!solid(footTx,footTy) || solid(footTx,wallTy)) dg.dir*=-1;
+    if(!standable(footTx,footTy) || solid(footTx,wallTy)) dg.dir*=-1;
     dg.x+=dg.dir*dg.spd*dt; dg.ft+=dt; if(dg.ft>0.18){dg.ft=0;dg.frame^=1;}
     // black dog: continuous small hops
     if(dg.kind==='black'){
@@ -521,7 +559,11 @@ function oneUp(txt){ if(P.hearts<MAXHEART)P.hearts++;
 function updateBoss(dt){
   const bz=boss; if(!bz)return;
   if(!bz.alive){ if(bz.poof>0)bz.poof-=dt; return; }
-  if(!bz.active && Math.abs(P.x-bz.x)<VW*0.65) bz.active=true;
+  if(!bz.active){
+    const near = vertical ? (Math.abs((P.y+P.h/2)-(bz.y+bz.h/2))<VH*0.55)
+                          : (Math.abs(P.x-bz.x)<VW*0.65);
+    if(near) bz.active=true;
+  }
   if(bz.active && bz.hit<=0){
     bz.dir = (P.x < bz.x)?-1:1;
     bz.x += bz.dir*bz.spd*dt;
